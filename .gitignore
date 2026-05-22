@@ -1,0 +1,15 @@
+# Editor / IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Build/test artifacts (the canonical dist/new-cuda-project.ps1 IS committed
+# per README; this catches ad-hoc -OutputPath uses and any test logs)
+*.log
+build/
