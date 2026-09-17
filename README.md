@@ -1,107 +1,55 @@
-# cuda-project-bootstrap
+# Sussex CIM WSL/CUDA bootstrap
 
-Source for the `new-cuda-project.ps1` bootstrap script distributed to
-students. The built script is a single, self-contained `.ps1` that students
-download and run. This directory holds the editable sources and a build
-step that stitches them together.
+Maintainable source for the single-file student bootstrap.
 
 ## Layout
 
-```
-cuda-project-bootstrap/
-├── README.md               (this file)
-├── build.ps1               assembles the distributable script
-├── script-template.ps1     the script logic, with {{TEMPLATE: ...}} markers
-├── linux/                  bash scripts that run inside WSL
-│   ├── bootstrap-distro.sh
-│   ├── ensure-cuda.sh
-│   └── make-project.sh
-├── template/               files written into each generated project
-│   ├── CMakeLists.txt
-│   ├── main.cu
-│   ├── README.md
-│   ├── .gitignore
-│   └── .vscode/
-│       ├── settings.json
-│       ├── extensions.json
-│       ├── tasks.json
-│       └── launch.json
-└── dist/                   build output (committed for distribution)
-    └── new-cuda-project.ps1
-```
+- `script-template.ps1`: Windows orchestration and embedded-file markers.
+- `linux/prepare-distro.sh`: Ubuntu packages, student account and WSL configuration.
+- `linux/check-gpu.sh`: NVIDIA visibility test.
+- `linux/install-uv.sh`: pinned uv installer.
+- `linux/install-cuda-toolkit.sh`: optional compiler toolkit.
+- `linux/create-project.sh`: Python environment, packages, templates and CUDA test.
+- `build.ps1`: embeds the Linux scripts as Base64 and writes `dist/sussex-cim-bootstrap.ps1`.
+- `tests/test-source.ps1`: PowerShell parse/build checks and Bash syntax checks inside the selected WSL distribution.
 
-The `linux/` directory holds the bash scripts that get pushed inside WSL and
-executed there. The `template/` directory mirrors the layout of the project
-the bootstrap eventually generates. Edit both with normal tooling — VS Code
-gives you shell + CMake + JSON syntax highlighting, which is the whole point
-of splitting them out from the original monolithic script.
-
-Runtime placeholders like `__PROJECT_NAME__`, `__CUDA_ARCH__`, and `__USER__`
-survive the build verbatim and are substituted by `make-project.sh`'s `sed`
-pass when a student runs the script.
-
-## Build
+## Build and test on Windows
 
 ```powershell
-cd cuda-project-bootstrap
-.\build.ps1                       # writes dist\new-cuda-project.ps1
-.\build.ps1 -OutputPath foo.ps1   # custom output path
-.\build.ps1 -Check                # parse-check sources, write nothing
+.\build.ps1 -Check
+.\tests\test-source.ps1
+.\build.ps1
 ```
 
-`build.ps1` parses each `# {{TEMPLATE: $var = path}}` marker in
-`script-template.ps1`, replaces it with a single-quoted here-string holding
-the corresponding file's content, AST-parses the result, and writes the
-combined script to `dist/`. Marker paths are resolved from the bootstrap
-root, so both `linux/<file>` and `template/<file>` are valid.
+## Smoke test
 
-## Editing workflow
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\dist\sussex-cim-bootstrap.ps1 -Name cim-modular-smoke -SkipLaunch
+```
 
-1. Edit `template/<whatever>`, `linux/<whatever>`, or `script-template.ps1`.
-2. Run `.\build.ps1`.
-3. Test the built script with a dummy project name:
+The distributable remains one `.ps1` file. Edit the modular source files, rebuild, test, and commit both the sources and regenerated `dist` artifact.
 
-   ```powershell
-   .\dist\new-cuda-project.ps1 -Name smoke-test
-   # then, between iterations:
-   wsl --shutdown                                # if any GPU call hangs
-   wsl -d LabGPU -- rm -rf /home/$env:USERNAME/projects/smoke-test
-   ```
+## Build compatibility
 
-4. Commit both the source changes and the regenerated `dist/` artifact.
+The embed-marker regular expression is CRLF-safe for Windows PowerShell 5.1.
 
-## Adding a new template file
+## Windows-path handling
 
-1. Drop the file into `template/` (or `linux/`) at the path you want it
-   written to.
-2. Add a `Write-LfFile` line in `script-template.ps1`'s extract section,
-   pointing at the new file.
-3. Add a `# {{TEMPLATE: $E_yourname = relpath/file }}` marker in the
-   EMBEDDED FILES section.
-4. Rebuild.
+The test runner transfers each Bash source to WSL as Base64 and runs `bash -n` from standard input. It does not pass a `C:\...` path to an ambiguous Windows `bash.exe`.
 
-## Why WSL at all?
+## VS Code launch
 
-CUDA C++ on Windows needs MSVC as the host compiler, and MSVC needs Visual
-Studio (admin). WSL sidesteps that — apt installs the toolkit user-mode and
-g++ is the host compiler. The only one-time admin step is enabling WSL itself
-(IT runs `wsl --install --no-distribution` once per machine); after that,
-students provision distros + install CUDA bits entirely user-mode.
+The generated script launches the Windows VS Code CLI from PowerShell with `--remote wsl+<distro> <Linux path>`. It does not execute `Code.exe` from inside WSL.
 
-## Known-good lessons (don't re-discover)
+## Native stderr handling
 
-- **`2>&1` on native exes in Windows PowerShell 5.1** wraps stderr in
-  ErrorRecords and pollutes output arrays. `Invoke-WslBash` captures stderr
-  to a temp file instead.
-- **`nvidia-smi` can D-state hang** if the dxg connection to the Windows
-  driver is stale. `timeout` can't kill it, `SIGKILL` can't kill it; only
-  `wsl --shutdown` cures it. The installer therefore never calls
-  `nvidia-smi` itself — it tells the student to run it and how to recover.
-- **VS Code launch from PowerShell**: use `--folder-uri vscode-remote://wsl+<distro><path>`,
-  not the bare `--remote wsl+<distro> /path` form. The latter is mangled by
-  cmd.exe argv parsing and lands the user in an empty workbench.
-- **`Start-Process` for the VS Code launch**, not `& code ...` — otherwise a
-  parent shell piping the script's output hangs forever on Code.exe's
-  inherited stdio handles.
-- **CMakeLists fallback** for `CMAKE_CUDA_COMPILER` so raw `cmake ..` from
-  `bash -c` (no PATH inheritance) still finds nvcc.
+Windows PowerShell 5.1 can turn native stderr progress messages into terminating errors when `$ErrorActionPreference` is `Stop`. `Invoke-Native` temporarily uses `Continue` and treats the native process exit code as authoritative.
+
+## Idempotent virtual environments
+
+`create-project.sh` reuses a valid `.venv` when its Python minor version matches the requested version. It recreates the environment only when it is incomplete or uses a different Python minor version.
+
+## Native progress display
+
+The PowerShell wrapper merges native stderr into ordinary console output. Installer progress remains visible without being displayed as a `NativeCommandError`; the process exit code remains authoritative.
